@@ -1,0 +1,98 @@
+---
+title: "Physiological Biomarkers of Acute Nurse Stress"
+author: "Sariya Patel"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+
+PROCESSED_DIR <- "../data/processed"
+FIGURES_DIR <- "../output/figures"
+TABLES_DIR <- "../output/tables"
+```
+
+## Overview
+
+This report analyses physiological sensor data from Empatica E4 wearables worn by 15 frontline nurses during the COVID-19 pandemic. The goal is to identify objective biological markers that correlate with acute stress during hospital shifts.
+
+The dataset comprises approximately 1,250 hours of multi-signal recordings (Heart Rate, Electrodermal Activity, Skin Temperature, Accelerometer, Blood Volume Pulse) across 609 individual recording sessions.
+
+## Data Quality Considerations
+
+Before analysis, two key data quality issues were identified and addressed:
+
+**1. Misaligned sampling rates across signals**
+
+The Empatica E4 records different signals at different frequencies — Heart Rate at 1Hz, EDA at 4Hz, Accelerometer at 32Hz, and BVP at 64Hz. These cannot be directly joined without introducing massive sparsity. All signals were therefore down-sampled to a unified 1Hz timeline by averaging within each second. This sacrifices some high-frequency detail (e.g., individual heartbeats from BVP) but is necessary for a coherent analytical dataset.
+
+**2. Physiologically implausible values from sensor artifacts**
+
+Wearable sensors in high-movement clinical environments frequently lose skin contact, producing readings like HR = 0 or temperature = 15°C. These were filtered using hard physiological boundaries (HR: 30–220 bpm, Temp: 25–42°C, EDA ≥ 0) before modelling. Additionally, raw EDA is highly sensitive to arm movement, so a 60-second rolling average was used to separate sustained arousal from transient motion spikes.
+
+**3. Irregular session durations and potential duplicates**
+
+Session durations varied from a few minutes to several hours. Sessions shorter than 60 seconds were excluded during ingestion (insufficient data for rolling features). Duplicate timestamps within a session — caused by clock drift or overlapping sensor restarts — were collapsed by averaging.
+
+## Feature Engineering
+
+Four features were derived from the raw 1Hz signals:
+
+| Feature | Window | Rationale |
+|---------|--------|-----------|
+| `eda_rolling_60s` | 60s trailing mean | Smooths motion artifacts; captures sustained sympathetic arousal |
+| `hr_variability` | 5-min rolling SD | Proxy for SDNN (heart rate variability); low HRV indicates stress |
+| `time_segment` | Hour-based | Bins timestamps into Early/Mid/Late Shift and Night to capture circadian and workload patterns |
+| `acc_rolling_60s` | 60s trailing mean | Distinguishes physical exertion from psychological stress when HR is elevated |
+
+## Correlation Analysis
+
+Spearman rank correlation was chosen because physiological signals have non-linear relationships and the data contains motion-induced outliers. BVP was excluded as it showed near-zero correlation (< 0.01) with all other signals at 1Hz resolution.
+
+```{r heatmap, out.width="100%", fig.align="center"}
+include_graphics(file.path(FIGURES_DIR, "correlation_heatmap.png"))
+```
+
+Key relationships: EDA and its rolling average are strongly correlated (r = 0.97, as expected). HR variability shows a moderate positive correlation with Heart Rate (r = 0.29) and a negative correlation with Skin Temperature (r = −0.31), suggesting that periods of higher autonomic variability coincide with lower peripheral skin temperature — consistent with sympathetic activation.
+
+## Statistical Model
+
+A linear mixed-effects model was fitted to test whether physiological features predict heart rate changes while accounting for individual nurse baselines.
+
+**Model:** `hr ~ eda_scaled + temp_scaled + acc_scaled + hrv_scaled + time_segment + (1 | subject_id)`
+
+The random intercept for `subject_id` is essential — treating 100,000 repeated measures from 15 nurses as independent observations would violate the independence assumption and inflate significance.
+
+```{r results_table}
+fixed_effects <- read_csv(file.path(TABLES_DIR, "fixed_effects.csv"))
+
+fixed_effects %>%
+  select(term, estimate, std.error, p.value) %>%
+  mutate(
+    p.value = ifelse(p.value < 0.001, "< 0.001", as.character(round(p.value, 4))),
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    term = str_replace_all(term, "_", " ")
+  ) %>%
+  kable(caption = "Mixed-Effects Model: Fixed Effects on Heart Rate") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+**Diagnostics:** The Q-Q plot reveals right-skewed residuals (heavy upper tail), which is expected — physiological data naturally contains outlier episodes of very high HR. This does not invalidate the mixed-effects estimates but may widen confidence intervals slightly. VIF values were all below 2, confirming no multicollinearity.
+
+## Key Insights
+
+1. **EDA is the most sensitive stress indicator in this dataset.** Electrodermal Activity showed a significant positive association with Heart Rate even after controlling for physical movement and shift phase. This aligns with its known role as a marker of sympathetic nervous system arousal and makes it a strong candidate for threshold-based stress alerting.
+
+2. **Physical activity is a critical confounder that must be controlled.** Without accelerometer data in the model, it is impossible to distinguish between a nurse who is psychologically stressed and one who is simply walking briskly. The ACC rolling mean effectively isolates periods of high HR + high EDA + low movement — the signature of psychological stress.
+
+3. **Individual baselines vary substantially.** The random effects component captured meaningful between-nurse variance in resting heart rate (SD ≈ 3.7 bpm). This confirms that a fixed threshold (e.g., "alert if HR > 100 bpm") would produce unacceptable false-positive rates. Any deployed system would need to learn personalised baselines.

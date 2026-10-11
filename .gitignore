@@ -1,0 +1,28 @@
+# ---- Raw & processed data (too large for Git, not our IP) ----
+data/
+doi_10_5061_dryad_5hqbzkh6f__v20210917.zip
+
+# ---- Assessment PDF (confidential) ----
+_Data Analyst (R) Technical Assessment .docx.pdf
+
+# ---- Submission zip (already delivered) ----
+Sanius_Assessment_Final_Deliverables.zip
+
+# ---- Rendered outputs (reproducible from source) ----
+report/analysis_report.html
+
+# ---- Presentation generation script (not a deliverable) ----
+generate_presentation.R
+
+# ---- R / RStudio artifacts ----
+.Rhistory
+.Rdata
+.RData
+.Ruserdata
+*.Rproj.user/
+.Rproj.user/
+
+# ---- OS junk ----
+.DS_Store
+Thumbs.db
+desktop.ini
